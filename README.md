@@ -1,74 +1,54 @@
-# Store Sales Forecasting using Ensemble Learning
+# Store Sales Forecasting with Ensemble Learning
 
-## 📌 Project Overview
-This project focuses on predicting daily product sales for retail stores
-using historical time-series data combined with external information
-such as oil prices, holidays, store metadata, and transactions.
+This repository contains a Jupyter notebook for experimenting with daily retail sales forecasting using the Kaggle **Store Sales - Time Series Forecasting** data. The notebook fits LightGBM, XGBoost, and CatBoost models and writes a weighted prediction file. It is an exploratory project, not a verified or reproducible benchmark.
 
-The solution uses advanced feature engineering techniques and
-ensemble learning to improve forecasting accuracy.
+## Data
 
----
+The six competition files required by the notebook are not included in this repository:
 
-## 📊 Dataset
-The dataset is provided by Kaggle as part of the
-**Store Sales - Time Series Forecasting** competition.
+- `train.csv`
+- `test.csv`
+- `stores.csv`
+- `oil.csv`
+- `holidays_events.csv`
+- `transactions.csv`
 
-Main files used:
-- train.csv
-- test.csv
-- stores.csv
-- oil.csv
-- holidays_events.csv
-- transactions.csv
+Obtain the files from the [Kaggle competition](https://www.kaggle.com/competitions/store-sales-time-series-forecasting/data) and follow its terms. Place them together in a local directory (the default is `data/`, which is intentionally not tracked), or set `STORE_SALES_DATA_DIR` to their directory. For example, in a POSIX shell:
 
----
+```sh
+export STORE_SALES_DATA_DIR="$HOME/datasets/store-sales"
+```
 
-## ⚙️ Feature Engineering
-Key engineered features include:
-- Date-based features (year, month, day, day of week)
-- Lag features for historical sales
-- Rolling window statistics
-- Promotion indicators
-- Holiday and oil price effects
+On Windows PowerShell, set the variable with `$env:STORE_SALES_DATA_DIR = 'C:\path\to\store-sales'` for the current session. The notebook reports the missing filenames before loading if the expected files are not present.
 
----
+## Setup and run
 
-## 🤖 Models Used
-- LightGBM
-- XGBoost
-- CatBoost
+Use Python 3.10 or newer in a virtual environment, then install the notebook dependencies:
 
-Each model is trained separately and evaluated using RMSLE.
+```sh
+python -m venv .venv
+# Activate .venv using the command for your operating system
+python -m pip install -r requirements.txt jupyter
+jupyter notebook "STORE SALES TIME SERIES FORECASTING .ipynb"
+```
 
----
+The dependency list is not version-locked: this repository has no recorded, verified environment, so the listed packages should not be interpreted as a tested compatibility matrix. Record and pin versions after validating the full notebook with the competition data if reproducible results are needed.
 
-## 🔗 Ensemble Strategy
-Final predictions are generated using a weighted ensemble:
-- 50% XGBoost
-- 40% LightGBM
-- 10% CatBoost
+## What the notebook does
 
----
+It merges store, oil, holiday, and transaction data; creates calendar and time-series features; trains the three regressors; compares individual validation RMSLE values; then combines test predictions with fixed weights (50% XGBoost, 40% LightGBM, 10% CatBoost) and writes `submission_final.csv` in the notebook's current working directory.
 
-## 📈 Evaluation Metric
-- Root Mean Squared Logarithmic Error (RMSLE)
+## Important limitations
 
----
+- The raw data is absent, so the training and prediction workflow has not been rerun as part of this repository repair. The checked-in `submission_final.csv` is a pre-existing artifact; it has not been verified against the competition test IDs or regenerated from the notebook.
+- In the current notebook, lag and rolling features are calculated on `train` only. At prediction time, missing test feature columns are filled with zero. Transactions are also merged directly by date and store, with missing test values filled by zero. Consequently, the test-time features do not match a demonstrated, leakage-safe forecasting setup. The saved predictions and validation numbers must not be treated as verified evidence of generalization.
+- Validation uses a year-quantile split and does not establish that the validation procedure reproduces the competition's multi-day forecast horizon. The ensemble weights are fixed, and no ensemble score is calculated in the notebook.
+- The notebook saves the output CSV relative to the current working directory; check the output location before replacing any existing file.
 
-## 📁 Files Included
-- `store_sales_ensemble.ipynb` – Full training and prediction pipeline
-- `submission_final.csv` – Final predictions file
-- `README.md` – Project documentation
+These modeling limitations require an explicitly defined forecast horizon and access to the original data to repair and validate responsibly. No accuracy or model-performance claim is made here.
 
----
+## Files
 
-## 🏁 Results
-The ensemble model achieves strong validation performance
-and produces stable predictions for unseen test data.
-
----
-
-## 🚀 Author
-**Abdulrahman Ahmed**  
-Artificial Intelligence Engineer
+- `STORE SALES TIME SERIES FORECASTING .ipynb` — training and prediction notebook.
+- `requirements.txt` — unpinned Python package names used by the notebook.
+- `submission_final.csv` — checked-in prediction artifact of unverified provenance.

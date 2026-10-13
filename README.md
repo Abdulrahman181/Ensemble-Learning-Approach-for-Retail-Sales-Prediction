@@ -1,74 +1,45 @@
-# Store Sales Forecasting using Ensemble Learning
+# Store Sales Forecasting with Ensemble Learning
 
-## 📌 Project Overview
-This project focuses on predicting daily product sales for retail stores
-using historical time-series data combined with external information
-such as oil prices, holidays, store metadata, and transactions.
+This repository contains a portable forecasting pipeline for Kaggle's **Store Sales - Time Series Forecasting** data. The implementation is in [`store_sales_forecasting.py`](store_sales_forecasting.py); the notebook is a small interface to that module.
 
-The solution uses advanced feature engineering techniques and
-ensemble learning to improve forecasting accuracy.
+## Data requirements
 
----
+The repository does **not** include the Kaggle input data. Put these files in one directory:
 
-## 📊 Dataset
-The dataset is provided by Kaggle as part of the
-**Store Sales - Time Series Forecasting** competition.
+- `train.csv` (`id`, `date`, `store_nbr`, `family`, `sales`, `onpromotion`)
+- `test.csv` (`id`, `date`, `store_nbr`, `family`, `onpromotion`)
+- `stores.csv`
+- `oil.csv`
+- `holidays_events.csv`
+- `transactions.csv`
 
-Main files used:
-- train.csv
-- test.csv
-- stores.csv
-- oil.csv
-- holidays_events.csv
-- transactions.csv
+Set `STORE_SALES_DATA_DIR` or pass `--data-dir`. If files are absent or incomplete, the CLI raises a clear error and does not create a fabricated submission.
 
----
+## Setup and usage
 
-## ⚙️ Feature Engineering
-Key engineered features include:
-- Date-based features (year, month, day, day of week)
-- Lag features for historical sales
-- Rolling window statistics
-- Promotion indicators
-- Holiday and oil price effects
+```bash
+python -m pip install -r requirements.txt
+export STORE_SALES_DATA_DIR=/absolute/path/to/kaggle/store-sales-data
+python store_sales_forecasting.py --data-dir "$STORE_SALES_DATA_DIR" --output submission_final.csv
+```
 
----
+Alternatively, open `STORE SALES TIME SERIES FORECASTING .ipynb`. The notebook skips training with an explanatory message when the data directory is unavailable.
 
-## 🤖 Models Used
-- LightGBM
-- XGBoost
-- CatBoost
+## Engineering notes
 
-Each model is trained separately and evaluated using RMSLE.
+- Inputs are loaded with portable `pathlib` paths and strict date parsing; the original machine-specific Windows path was removed.
+- External merges use cardinality validation. Oil and transaction lag features are calculated at their natural date/store grain rather than by shifting a row-expanded table.
+- The holdout is the latest 5% of dates. Target-history features for validation and test rows are built from prior training history with holdout/test sales masked, preventing future target leakage. Categorical encoding is fitted on training rows and handles unknown categories as `-1`.
+- Models learn `log1p(sales)` and predictions are inverse-transformed and clipped at zero before RMSLE. LightGBM, XGBoost, and CatBoost use fixed seeds and single-thread settings for more stable results. The documented ensemble weights are XGBoost 50%, LightGBM 40%, and CatBoost 10%.
+- The printed RMSLE is a local chronological holdout score, **not** a Kaggle leaderboard result. No complete training run was claimed in this review because the input data are not present in the repository.
 
----
+## Repository checks
 
-## 🔗 Ensemble Strategy
-Final predictions are generated using a weighted ensemble:
-- 50% XGBoost
-- 40% LightGBM
-- 10% CatBoost
+Run the lightweight static checks without model training:
 
----
+```bash
+python tests/test_static_validation.py
+python -m py_compile store_sales_forecasting.py
+```
 
-## 📈 Evaluation Metric
-- Root Mean Squared Logarithmic Error (RMSLE)
-
----
-
-## 📁 Files Included
-- `store_sales_ensemble.ipynb` – Full training and prediction pipeline
-- `submission_final.csv` – Final predictions file
-- `README.md` – Project documentation
-
----
-
-## 🏁 Results
-The ensemble model achieves strong validation performance
-and produces stable predictions for unseen test data.
-
----
-
-## 🚀 Author
-**Abdulrahman Ahmed**  
-Artificial Intelligence Engineer
+`submission_final.csv` is a pre-existing repository artifact and is not treated as a newly verified result by this review.

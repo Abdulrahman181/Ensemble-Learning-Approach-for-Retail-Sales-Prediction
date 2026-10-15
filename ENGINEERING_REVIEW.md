@@ -82,3 +82,47 @@ oil.csv, holidays_events.csv, and transactions.csv; no output was created.
 - The current holdout strategy is chronological and leakage-aware, but target-lag features for later holdout/test rows become unavailable after masked rows; production forecasting may benefit from a documented recursive prediction strategy or a model that excludes target-derived features.
 - Once data and dependencies are provisioned, run the CLI, inspect local per-model and ensemble RMSLE, check prediction finiteness/non-negativity, and compare the generated submission row count and IDs with `test.csv` before any external upload.
 - No changes were pushed to GitHub. A local-only commit was created as requested.
+
+## Second Senior Review
+
+**Review date:** 2026-10-15 UTC
+
+The second pass inspected every tracked source, notebook, configuration/dependency file, test, README, generated CSV artifact, Git history, and working diff. The repository was clean at the start of this pass, and no Kaggle input data or model-library installation was assumed.
+
+### Findings fixed in this pass
+
+1. **Incomplete source-table contracts (fixed).** `load_data` previously validated only a subset of train/test columns and deferred several failures to pandas merge operations. It now validates all six table schemas, non-null key fields, unique IDs and row grains, numeric sales/promotion fields, store uniqueness, oil date uniqueness, and transaction date/store uniqueness with actionable errors.
+2. **Duplicate oil rows could be silently discarded (fixed).** The feature builder used `drop_duplicates("date")`, which could hide conflicting source data. Duplicate oil dates now fail validation; oil values are numeric and finite when present.
+3. **Potential exogenous leakage from oil backfill (fixed).** Leading missing oil values were back-filled from a later observation. The pipeline now forward-fills only and leaves unresolved missing values for the existing numeric fill policy, avoiding future information in an early date.
+4. **Holdout boundary was row-quantile based (fixed).** The prior 0.95 row quantile could select a boundary that did not represent the documented latest 5% of dates. The split now reserves complete unique dates, requires at least two distinct dates, and rejects test dates that overlap or precede training dates.
+5. **Metric and ensemble contracts were permissive (fixed).** RMSLE now rejects shape mismatch, empty/non-finite inputs, and negative actuals. Ensemble inference validates model keys, weight sum, output shape, finiteness, and guarded log-to-sales conversion; the CLI also reports the ensemble holdout score.
+6. **Output path behavior was fragile (fixed).** Successful runs now create missing parent directories before writing. Failed data validation remains side-effect free, and the CLI gives a clear dependency/data error instead of a raw traceback for supported failure classes.
+7. **Tests were not discoverable by pytest (fixed).** The prior file only exposed a script-style `main`, so `pytest` reported “no tests ran.” Four executable tests now cover aligned matrices and date splitting, masked target-history features, duplicate-oil rejection, and metric/ensemble contracts. The test bootstrap works both as a script and under pytest.
+8. **Dependency compatibility was underspecified (fixed).** Runtime and test dependencies now have bounded major-version ranges (`requirements.txt`), reducing accidental incompatible upgrades while retaining Python 3.11-compatible current releases.
+
+### Validation performed in the second pass
+
+```text
+python3 tests/test_static_validation.py
+Static validation passed
+
+pytest -q
+4 passed
+
+python3 -m py_compile store_sales_forecasting.py tests/test_static_validation.py
+Passed
+
+ruff check store_sales_forecasting.py tests/test_static_validation.py
+All checks passed!
+
+python3 store_sales_forecasting.py --data-dir /tmp/definitely-missing-retail-data ...
+Exited 2 with all six missing filenames; no output was created.
+```
+
+The synthetic tests exercise preparation and validation only; they do not claim a model-training or Kaggle end-to-end run. The notebook remains output-free with null execution counts, and the pre-existing `submission_final.csv` remains an unverified historical artifact.
+
+### Remaining risks after the second pass
+
+- The six Kaggle source files are absent, and LightGBM/XGBoost/CatBoost are not installed in this sandbox; model fitting, dependency interoperability, prediction quality, and generated submission IDs were not end-to-end verified.
+- Target-history features for validation/test rows are intentionally conservative: masked future rows cannot provide recursive predictions. A production forecast design should explicitly choose recursive inference or remove target-derived features.
+- The pipeline assumes Kaggle's expected store/family grain and future-only test period. Those assumptions are now validated rather than silently accepted, but alternate datasets require an intentional contract change.

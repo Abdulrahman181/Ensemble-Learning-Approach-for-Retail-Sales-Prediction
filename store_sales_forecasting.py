@@ -26,6 +26,12 @@ REQUIRED_FILES = (
     "transactions.csv",
 )
 CATEGORICAL_COLUMNS = ["family", "city", "state", "type", "cluster"]
+TABLE_REQUIRED_COLUMNS = {
+    "stores": {"store_nbr", "city", "state", "type", "cluster"},
+    "oil": {"date", "dcoilwtico"},
+    "holidays": {"date", "type", "transferred"},
+    "transactions": {"date", "store_nbr", "transactions"},
+}
 
 
 def resolve_data_dir(data_dir: str | Path | None = None) -> Path:
@@ -51,8 +57,31 @@ def _read_csv(path: Path, *, date_column: str | None = None) -> pd.DataFrame:
     if date_column:
         if date_column not in frame.columns:
             raise ValueError(f"{path.name} must contain a '{date_column}' column")
-        frame[date_column] = pd.to_datetime(frame[date_column], errors="raise")
+        parsed = pd.to_datetime(frame[date_column], errors="coerce")
+        if parsed.isna().any():
+            raise ValueError(f"{path.name} contains missing or invalid {date_column} values")
+        frame[date_column] = parsed
     return frame
+
+
+def _require_columns(frame: pd.DataFrame, name: str, required: set[str]) -> None:
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(f"{name}.csv is missing required columns: {', '.join(missing)}")
+
+
+def _coerce_numeric(frame: pd.DataFrame, column: str, name: str) -> None:
+    values = pd.to_numeric(frame[column], errors="coerce")
+    invalid = values.isna() & frame[column].notna()
+    if invalid.any():
+        raise ValueError(f"{name}.csv column '{column}' must be numeric")
+    frame[column] = values
+
+
+def _require_integer(frame: pd.DataFrame, column: str, name: str) -> None:
+    values = frame[column]
+    if not np.isfinite(values).all() or not np.equal(values, np.floor(values)).all():
+        raise ValueError(f"{name}.csv column '{column}' must contain finite integers")
 
 
 def load_data(data_dir: str | Path | None = None) -> dict[str, pd.DataFrame]:
@@ -68,12 +97,49 @@ def load_data(data_dir: str | Path | None = None) -> dict[str, pd.DataFrame]:
     }
     required_train = {"id", "date", "store_nbr", "family", "sales", "onpromotion"}
     required_test = {"id", "date", "store_nbr", "family", "onpromotion"}
-    for name, required in (("train", required_train), ("test", required_test)):
-        missing = sorted(required.difference(data[name].columns))
-        if missing:
-            raise ValueError(f"{name}.csv is missing required columns: {', '.join(missing)}")
-    if data["train"]["sales"].isna().any() or (data["train"]["sales"] < 0).any():
+    _require_columns(data["train"], "train", required_train)
+    _require_columns(data["test"], "test", required_test)
+    for name, required in TABLE_REQUIRED_COLUMNS.items():
+        _require_columns(data[name], name, required)
+    for name in ("train", "test", "stores", "oil", "transactions"):
+        if data[name].empty:
+            raise ValueError(f"{name}.csv must not be empty")
+    for name in ("train", "test"):
+        frame = data[name]
+        for column in ("id", "store_nbr", "onpromotion"):
+            _coerce_numeric(frame, column, name)
+        _require_integer(frame, "id", name)
+        _require_integer(frame, "store_nbr", name)
+        if frame[["id", "date", "store_nbr", "family"]].isna().any().any():
+            raise ValueError(f"{name}.csv contains null identifier, date, store, or family values")
+        if frame["id"].duplicated().any():
+            raise ValueError(f"{name}.csv must contain unique id values")
+        if frame[["date", "store_nbr", "family"]].duplicated().any():
+            raise ValueError(f"{name}.csv must contain unique date/store_nbr/family rows")
+        if (frame["onpromotion"].isna().any()
+                or not np.isfinite(frame["onpromotion"]).all()
+                or (frame["onpromotion"] < 0).any()):
+            raise ValueError(f"{name}.csv onpromotion must be finite, non-null, and non-negative")
+    _coerce_numeric(data["train"], "sales", "train")
+    if data["train"]["sales"].isna().any() or not np.isfinite(data["train"]["sales"]).all() or (data["train"]["sales"] < 0).any():
         raise ValueError("train.csv sales must be non-null and non-negative for RMSLE training")
+    if data["stores"]["store_nbr"].duplicated().any():
+        raise ValueError("stores.csv must contain one row per store_nbr")
+    _coerce_numeric(data["stores"], "store_nbr", "stores")
+    _require_integer(data["stores"], "store_nbr", "stores")
+    _coerce_numeric(data["transactions"], "store_nbr", "transactions")
+    _require_integer(data["transactions"], "store_nbr", "transactions")
+    if data["oil"]["date"].duplicated().any():
+        raise ValueError("oil.csv must contain one row per date")
+    if data["transactions"][["date", "store_nbr"]].duplicated().any():
+        raise ValueError("transactions.csv must contain one row per date/store_nbr")
+    _coerce_numeric(data["oil"], "dcoilwtico", "oil")
+    _coerce_numeric(data["transactions"], "transactions", "transactions")
+    known_stores = set(data["stores"]["store_nbr"])
+    for name in ("train", "test"):
+        unknown_stores = sorted(set(data[name]["store_nbr"]) - known_stores)
+        if unknown_stores:
+            raise ValueError(f"{name}.csv references stores absent from stores.csv: {unknown_stores}")
     return data
 
 
@@ -82,8 +148,13 @@ def _build_oil_features(oil: pd.DataFrame) -> pd.DataFrame:
     missing = required.difference(oil.columns)
     if missing:
         raise ValueError(f"oil.csv is missing required columns: {', '.join(sorted(missing))}")
-    daily = oil[["date", "dcoilwtico"]].drop_duplicates("date").sort_values("date").copy()
-    daily["dcoilwtico"] = daily["dcoilwtico"].ffill().bfill()
+    daily = oil[["date", "dcoilwtico"]].sort_values("date").copy()
+    daily["dcoilwtico"] = pd.to_numeric(daily["dcoilwtico"], errors="coerce")
+    if daily["dcoilwtico"].notna().any() and not np.isfinite(daily["dcoilwtico"].dropna()).all():
+        raise ValueError("oil.csv dcoilwtico must contain finite numeric values")
+    # Forward-fill only: back-filling would use a future oil observation for an
+    # early missing date and can leak future information into a time split.
+    daily["dcoilwtico"] = daily["dcoilwtico"].ffill()
     for lag in (1, 7):
         daily[f"oil_lag_{lag}"] = daily["dcoilwtico"].shift(lag)
     daily["oil_roll7"] = daily["dcoilwtico"].shift(1).rolling(7, min_periods=1).mean()
@@ -98,6 +169,11 @@ def _build_transaction_features(transactions: pd.DataFrame) -> pd.DataFrame:
             f"transactions.csv is missing required columns: {', '.join(sorted(missing))}"
         )
     tx = transactions[["date", "store_nbr", "transactions"]].copy()
+    tx["transactions"] = pd.to_numeric(tx["transactions"], errors="coerce")
+    if tx["transactions"].notna().any() and not np.isfinite(tx["transactions"].dropna()).all():
+        raise ValueError("transactions.csv transactions must contain finite numeric values")
+    if tx[["date", "store_nbr"]].duplicated().any():
+        raise ValueError("transactions.csv must contain one row per date/store_nbr")
     tx = tx.sort_values(["store_nbr", "date"])
     tx["transactions_lag1"] = tx.groupby("store_nbr")["transactions"].shift(1)
     tx["transactions_roll7"] = tx.groupby("store_nbr")["transactions"].transform(
@@ -114,6 +190,9 @@ def merge_external_data(
     transactions: pd.DataFrame,
 ) -> pd.DataFrame:
     """Merge exogenous tables with cardinality checks and no target columns."""
+    _require_columns(frame, "input", {"date", "store_nbr", "family", "onpromotion"})
+    _require_columns(stores, "stores", TABLE_REQUIRED_COLUMNS["stores"])
+    _require_columns(holidays, "holidays_events", TABLE_REQUIRED_COLUMNS["holidays"])
     result = frame.copy()
     result = result.merge(stores, on="store_nbr", how="left", validate="many_to_one")
     result = result.merge(_build_oil_features(oil), on="date", how="left", validate="many_to_one")
@@ -213,7 +292,13 @@ def prepare_datasets(data_dir: str | Path | None = None) -> dict[str, Any]:
     test = merge_external_data(data["test"], data["stores"], data["oil"], data["holidays"], data["transactions"])
     train = train.sort_values("date").reset_index(drop=True)
     test = test.sort_values("date").reset_index(drop=True)
-    cutoff = train["date"].quantile(0.95)
+    if test["date"].min() <= train["date"].max():
+        raise ValueError("test.csv dates must be strictly later than all train.csv dates")
+    unique_dates = train["date"].drop_duplicates().sort_values().reset_index(drop=True)
+    validation_count = max(1, int(np.ceil(len(unique_dates) * 0.05)))
+    if validation_count >= len(unique_dates):
+        raise ValueError("The date split needs at least two distinct training dates")
+    cutoff = unique_dates.iloc[-validation_count]
     fit_mask = train["date"] < cutoff
     if not fit_mask.any() or fit_mask.all():
         raise ValueError("The date split produced an empty training or validation partition")
@@ -241,11 +326,18 @@ def prepare_datasets(data_dir: str | Path | None = None) -> dict[str, Any]:
 
 
 def rmsle(y_true: np.ndarray, predictions: np.ndarray) -> float:
-    """Compute RMSLE after clipping invalid negative forecasts."""
+    """Compute RMSLE after clipping negative forecasts to the metric domain."""
     from sklearn.metrics import mean_squared_log_error
 
-    actual = np.clip(np.asarray(y_true, dtype=float), 0, None)
-    predicted = np.clip(np.asarray(predictions, dtype=float), 0, None)
+    actual = np.asarray(y_true, dtype=float)
+    predicted = np.asarray(predictions, dtype=float)
+    if actual.shape != predicted.shape or actual.size == 0:
+        raise ValueError("RMSLE inputs must have the same non-empty shape")
+    if not np.isfinite(actual).all() or not np.isfinite(predicted).all():
+        raise ValueError("RMSLE inputs must contain only finite values")
+    if (actual < 0).any():
+        raise ValueError("RMSLE actual values must be non-negative")
+    predicted = np.clip(predicted, 0, None)
     return float(np.sqrt(mean_squared_log_error(actual, predicted)))
 
 
@@ -280,9 +372,25 @@ def train_models(datasets: dict[str, Any]) -> dict[str, Any]:
 
 def predict_ensemble(models: dict[str, Any], X: pd.DataFrame) -> np.ndarray:
     """Predict on the original sales scale using the documented weights."""
+    missing = sorted(set(ENSEMBLE_WEIGHTS).difference(models))
+    if missing:
+        raise KeyError(f"Missing ensemble model(s): {', '.join(missing)}")
+    if not np.isclose(sum(ENSEMBLE_WEIGHTS.values()), 1.0):
+        raise ValueError("ENSEMBLE_WEIGHTS must sum to 1")
     total = np.zeros(len(X), dtype=float)
     for name, weight in ENSEMBLE_WEIGHTS.items():
-        total += weight * np.expm1(models[name].predict(X))
+        log_prediction = np.asarray(models[name].predict(X), dtype=float)
+        if log_prediction.shape != (len(X),) or not np.isfinite(log_prediction).all():
+            raise ValueError(f"{name} produced invalid log-scale predictions")
+        # Guard the inverse transform against an accidental model overflow;
+        # normal log1p(sales) predictions are far below this bound.
+        safe_log = np.clip(log_prediction, -745.0, np.log(np.finfo(float).max) - 1.0)
+        original_scale = np.expm1(safe_log)
+        if not np.isfinite(original_scale).all():
+            raise ValueError(f"{name} produced non-finite sales predictions")
+        total += weight * original_scale
+    if not np.isfinite(total).all():
+        raise ValueError("Ensemble produced non-finite sales predictions")
     return np.clip(total, 0, None)
 
 
@@ -290,12 +398,19 @@ def run(data_dir: str | Path | None, output: str | Path) -> dict[str, float]:
     """Train, report holdout RMSLE, and write a submission without fabricating results."""
     datasets = prepare_datasets(data_dir)
     models = train_models(datasets)
-    scores = {
-        name: rmsle(datasets["y_val"], np.expm1(model.predict(datasets["X_val"])))
-        for name, model in models.items()
-    }
+    scores = {}
+    for name, model in models.items():
+        log_prediction = np.asarray(model.predict(datasets["X_val"]), dtype=float)
+        if not np.isfinite(log_prediction).all():
+            raise ValueError(f"{name} produced non-finite validation predictions")
+        scores[name] = rmsle(datasets["y_val"], np.expm1(np.clip(log_prediction, -745.0, 700.0)))
     predictions = predict_ensemble(models, datasets["X_test"])
-    pd.DataFrame({"id": datasets["test_id"], "sales": predictions}).to_csv(output, index=False)
+    scores["ensemble"] = rmsle(
+        datasets["y_val"], predict_ensemble(models, datasets["X_val"])
+    )
+    output_path = Path(output).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"id": datasets["test_id"], "sales": predictions}).to_csv(output_path, index=False)
     return scores
 
 
@@ -306,7 +421,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         scores = run(args.data_dir, args.output)
-    except (FileNotFoundError, ValueError, KeyError) as exc:
+    except (FileNotFoundError, ValueError, KeyError, OSError, ImportError) as exc:
         parser.error(str(exc))
     print("Holdout RMSLE (not Kaggle leaderboard scores):")
     for name, score in scores.items():

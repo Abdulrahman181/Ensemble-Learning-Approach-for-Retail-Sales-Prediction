@@ -29,9 +29,9 @@ Alternatively, open `STORE SALES TIME SERIES FORECASTING .ipynb`. The notebook s
 
 - Inputs are loaded with portable `pathlib` paths and strict date parsing; the original machine-specific Windows path was removed.
 - External merges use cardinality validation. Oil and transaction lag features are calculated at their natural date/store grain rather than by shifting a row-expanded table.
-- The holdout is the latest 5% of dates. Target-history features for validation and test rows are built from prior training history with holdout/test sales masked, preventing future target leakage. Categorical encoding is fitted on training rows and handles unknown categories as `-1`.
+- The holdout is the latest 5% of **unique** training dates, with at least one complete date reserved when the dataset is large enough. Target-history features for validation and test rows are built from prior training history with holdout/test sales masked, preventing future target leakage. Categorical encoding is fitted on training rows and handles unknown categories as `-1`.
 - Models learn `log1p(sales)` and predictions are inverse-transformed and clipped at zero before RMSLE. LightGBM, XGBoost, and CatBoost use fixed seeds and single-thread settings for more stable results. The documented ensemble weights are XGBoost 50%, LightGBM 40%, and CatBoost 10%.
-- The printed RMSLE is a local chronological holdout score, **not** a Kaggle leaderboard result. No complete training run was claimed in this review because the input data are not present in the repository.
+- Source schemas, identifiers, merge grains, numeric domains, chronological train/test ordering, finite predictions, and output directory creation are validated before a submission is written. The printed RMSLE is a local chronological holdout score, **not** a Kaggle leaderboard result. No complete training run was claimed in this review because the input data are not present in the repository.
 
 ## Repository checks
 
@@ -39,6 +39,7 @@ Run the lightweight static checks without model training:
 
 ```bash
 python tests/test_static_validation.py
+pytest -q
 python -m py_compile store_sales_forecasting.py
 ```
 
